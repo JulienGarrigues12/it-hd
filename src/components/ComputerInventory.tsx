@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Plus, Monitor, Server, Laptop, HardDrive, Search, Filter } from 'lucide-react';
 import { format } from 'date-fns';
+import ComputerImport from './ComputerImport';
 
 interface ComputerAsset {
   id: string;
@@ -133,6 +134,8 @@ export default function ComputerInventory() {
           </div>
         </div>
       )}
+
+      <ComputerImport />
 
       <div className="bg-white shadow-sm rounded-lg">
         <div className="p-6 border-b border-gray-200">

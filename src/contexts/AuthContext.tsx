@@ -29,24 +29,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       setLoading(false);
+
+      // If session is null and we're not on the login page, redirect to login
+      if (!session?.user && window.location.pathname !== '/login') {
+        navigate('/login');
+      }
+    });
+
+    // Handle auth errors globally
+    supabase.auth.onAuthStateChange((event) => {
+      if (event === 'TOKEN_REFRESHED') {
+        // Token was successfully refreshed, no action needed
+        return;
+      }
+
+      if (event === 'SIGNED_OUT') {
+        navigate('/login');
+      }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [navigate]);
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) throw error;
-    navigate('/');
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      navigate('/');
+    } catch (error) {
+      console.error('Sign in error:', error);
+      throw error;
+    }
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-    navigate('/login');
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      navigate('/login');
+    } catch (error) {
+      console.error('Sign out error:', error);
+      // Force navigate to login even if sign out fails
+      navigate('/login');
+    }
   };
 
   const value = {

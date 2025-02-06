@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Clock, AlertCircle, CheckCircle, ArrowLeft, User, Calendar, Tag, MessageSquare } from 'lucide-react';
+import { Clock, AlertCircle, CheckCircle, ArrowLeft, User, Calendar, Tag, MessageSquare, UserPlus } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,8 +26,11 @@ interface Comment {
   user: { full_name: string };
 }
 
-interface UserRole {
-  role: 'user' | 'technician' | 'admin';
+interface Staff {
+  id: string;
+  full_name: string;
+  email: string;
+  role: 'technician' | 'admin';
 }
 
 export default function TicketDetail() {
@@ -42,6 +45,10 @@ export default function TicketDetail() {
   const [submitting, setSubmitting] = useState(false);
   const [userRole, setUserRole] = useState<string>('user');
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [staffMembers, setStaffMembers] = useState<Staff[]>([]);
+  const [selectedStaff, setSelectedStaff] = useState<string>('');
+  const [assigning, setAssigning] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -50,11 +57,32 @@ export default function TicketDetail() {
     }
   }, [id, user]);
 
+  useEffect(() => {
+    if (showAssignModal) {
+      loadStaffMembers();
+    }
+  }, [showAssignModal]);
+
+  async function loadStaffMembers() {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, full_name, email, role')
+        .in('role', ['technician', 'admin'])
+        .order('full_name');
+
+      if (error) throw error;
+      setStaffMembers(data || []);
+    } catch (err) {
+      console.error('Error loading staff members:', err);
+      setError('Failed to load staff members');
+    }
+  }
+
   async function loadUserRole() {
     if (!user) return;
     
     try {
-      // First try to get the user role
       const { data, error } = await supabase
         .from('users')
         .select('role')
@@ -65,28 +93,9 @@ export default function TicketDetail() {
 
       if (data) {
         setUserRole(data.role);
-      } else {
-        // If user doesn't exist, create a new user profile
-        const { error: insertError } = await supabase
-          .from('users')
-          .insert([
-            {
-              id: user.id,
-              email: user.email,
-              role: 'user',
-              full_name: user.email?.split('@')[0] || 'User'
-            }
-          ]);
-
-        if (insertError) {
-          console.error('Error creating user profile:', insertError);
-        } else {
-          setUserRole('user');
-        }
       }
     } catch (err) {
       console.error('Error loading user role:', err);
-      // Default to 'user' role if there's any error
       setUserRole('user');
     }
   }
@@ -159,12 +168,85 @@ export default function TicketDetail() {
 
       if (commentError) throw commentError;
 
-      await loadTicketData(); // Reload ticket data
+      await loadTicketData();
     } catch (err) {
       console.error('Error updating ticket status:', err);
       setError('Failed to update ticket status');
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function handleAssignTicket() {
+    if (!selectedStaff || !ticket || !user) return;
+
+    try {
+      setAssigning(true);
+      setError(null);
+
+      const { error: updateError } = await supabase
+        .from('tickets')
+        .update({ assigned_to: selectedStaff })
+        .eq('id', ticket.id);
+
+      if (updateError) throw updateError;
+
+      const assignedStaff = staffMembers.find(s => s.id === selectedStaff);
+      const { error: commentError } = await supabase
+        .from('ticket_comments')
+        .insert([
+          {
+            ticket_id: ticket.id,
+            user_id: user.id,
+            content: `Ticket assigned to ${assignedStaff?.full_name}`
+          }
+        ]);
+
+      if (commentError) throw commentError;
+
+      await loadTicketData();
+      setShowAssignModal(false);
+      setSelectedStaff('');
+    } catch (err) {
+      console.error('Error assigning ticket:', err);
+      setError('Failed to assign ticket');
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  async function handleUnassignTicket() {
+    if (!ticket || !user) return;
+
+    try {
+      setAssigning(true);
+      setError(null);
+
+      const { error: updateError } = await supabase
+        .from('tickets')
+        .update({ assigned_to: null })
+        .eq('id', ticket.id);
+
+      if (updateError) throw updateError;
+
+      const { error: commentError } = await supabase
+        .from('ticket_comments')
+        .insert([
+          {
+            ticket_id: ticket.id,
+            user_id: user.id,
+            content: 'Ticket unassigned'
+          }
+        ]);
+
+      if (commentError) throw commentError;
+
+      await loadTicketData();
+    } catch (err) {
+      console.error('Error unassigning ticket:', err);
+      setError('Failed to unassign ticket');
+    } finally {
+      setAssigning(false);
     }
   }
 
@@ -187,7 +269,7 @@ export default function TicketDetail() {
       if (error) throw error;
 
       setNewComment('');
-      await loadTicketData(); // Reload comments
+      await loadTicketData();
     } catch (err) {
       console.error('Error submitting comment:', err);
       setError('Failed to submit comment');
@@ -226,6 +308,7 @@ export default function TicketDetail() {
   };
 
   const canChangeStatus = userRole === 'admin' || userRole === 'technician';
+  const canAssignTickets = userRole === 'admin' || userRole === 'technician';
 
   if (loading) {
     return (
@@ -254,6 +337,15 @@ export default function TicketDetail() {
           Back to Tickets
         </button>
         <div className="flex items-center space-x-3">
+          {canAssignTickets && (
+            <button
+              onClick={() => setShowAssignModal(true)}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+            >
+              <UserPlus className="w-4 h-4 mr-2" />
+              Assign
+            </button>
+          )}
           {canChangeStatus ? (
             <select
               value={ticket.status}
@@ -296,6 +388,12 @@ export default function TicketDetail() {
               <Tag className="w-4 h-4 mr-2" />
               {ticket.category.name}
             </div>
+            {ticket.assignee && (
+              <div className="flex items-center">
+                <UserPlus className="w-4 h-4 mr-2" />
+                Assigned to {ticket.assignee.full_name}
+              </div>
+            )}
           </div>
         </div>
 
@@ -354,6 +452,66 @@ export default function TicketDetail() {
           </div>
         </div>
       </div>
+
+      {showAssignModal && (
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-md w-full p-6">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Assign Ticket</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="staff" className="block text-sm font-medium text-gray-700">
+                  Select Staff Member
+                </label>
+                <select
+                  id="staff"
+                  value={selectedStaff}
+                  onChange={(e) => setSelectedStaff(e.target.value)}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                >
+                  <option value="">Select a staff member</option>
+                  {staffMembers.map((staff) => (
+                    <option key={staff.id} value={staff.id}>
+                      {staff.full_name} ({staff.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAssignModal(false);
+                    setSelectedStaff('');
+                  }}
+                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                {ticket.assignee && (
+                  <button
+                    type="button"
+                    onClick={handleUnassignTicket}
+                    disabled={assigning}
+                    className="px-4 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50"
+                  >
+                    Unassign
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleAssignTicket}
+                  disabled={!selectedStaff || assigning}
+                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {assigning ? 'Assigning...' : 'Assign'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -18,16 +18,10 @@ type Category = {
   name: string;
   description: string;
   is_active: boolean;
+  ticket_type: 'incident' | 'request';
 };
 
 type Tab = 'users' | 'categories' | 'statistics' | 'settings';
-
-type SystemSettings = {
-  emailNotifications: boolean;
-  autoAssignment: boolean;
-  defaultPriority: 'low' | 'medium' | 'high';
-  maintenanceMode: boolean;
-};
 
 export default function AdminPanel() {
   const { user } = useAuth();
@@ -39,13 +33,6 @@ export default function AdminPanel() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [isNewUserExpanded, setIsNewUserExpanded] = useState(false);
-  const [settings, setSettings] = useState<SystemSettings>({
-    emailNotifications: true,
-    autoAssignment: false,
-    defaultPriority: 'medium',
-    maintenanceMode: false,
-  });
-
   const [newUser, setNewUser] = useState({
     email: '',
     full_name: '',
@@ -57,6 +44,7 @@ export default function AdminPanel() {
     name: '',
     description: '',
     is_active: true,
+    ticket_type: 'incident' as 'incident' | 'request',
   });
 
   useEffect(() => {
@@ -64,9 +52,10 @@ export default function AdminPanel() {
   }, [activeTab]);
 
   async function loadData() {
-    setLoading(true);
-    setError(null);
     try {
+      setLoading(true);
+      setError(null);
+
       if (activeTab === 'users') {
         const { data, error } = await supabase
           .from('users')
@@ -94,19 +83,24 @@ export default function AdminPanel() {
 
   async function createUser() {
     try {
+      // Create auth user with temporary password
       const { data: authUser, error: signUpError } = await supabase.auth.signUp({
         email: newUser.email,
-        password: 'temppass123',
+        password: 'temppass123', // User will be required to change this on first login
       });
 
       if (signUpError) throw signUpError;
 
       if (authUser.user) {
+        // Create user profile in the database
         const { error: profileError } = await supabase
           .from('users')
           .insert([{
             id: authUser.user.id,
-            ...newUser,
+            email: newUser.email,
+            full_name: newUser.full_name,
+            role: newUser.role,
+            department: newUser.department,
           }]);
 
         if (profileError) throw profileError;
@@ -145,12 +139,18 @@ export default function AdminPanel() {
 
   async function deleteUser(userId: string) {
     try {
-      const { error } = await supabase
+      // Delete user profile from database
+      const { error: dbError } = await supabase
         .from('users')
         .delete()
         .eq('id', userId);
 
-      if (error) throw error;
+      if (dbError) throw dbError;
+
+      // Delete user from auth
+      const { error: authError } = await supabase.auth.admin.deleteUser(userId);
+      if (authError) throw authError;
+
       await loadData();
     } catch (err) {
       console.error('Error deleting user:', err);
@@ -162,10 +162,15 @@ export default function AdminPanel() {
     try {
       const { error } = await supabase
         .from('ticket_categories')
-        .insert([newCategory]);
+        .insert([{
+          name: newCategory.name,
+          description: newCategory.description,
+          is_active: newCategory.is_active,
+          ticket_type: newCategory.ticket_type
+        }]);
 
       if (error) throw error;
-      setNewCategory({ name: '', description: '', is_active: true });
+      setNewCategory({ name: '', description: '', is_active: true, ticket_type: 'incident' });
       await loadData();
     } catch (err) {
       console.error('Error creating category:', err);
@@ -183,6 +188,7 @@ export default function AdminPanel() {
           name: editingCategory.name,
           description: editingCategory.description,
           is_active: editingCategory.is_active,
+          ticket_type: editingCategory.ticket_type
         })
         .eq('id', categoryId);
 
@@ -208,11 +214,6 @@ export default function AdminPanel() {
       console.error('Error deleting category:', err);
       setError('Failed to delete category. Please try again.');
     }
-  }
-
-  async function saveSettings() {
-    setError('Settings saved successfully!');
-    setTimeout(() => setError(null), 3000);
   }
 
   const tabs = [
@@ -471,14 +472,34 @@ export default function AdminPanel() {
                   onChange={(e) => setNewCategory({ ...newCategory, description: e.target.value })}
                   className="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                 />
+                <select
+                  value={newCategory.ticket_type}
+                  onChange={(e) => setNewCategory({ ...newCategory, ticket_type: e.target.value as 'incident' | 'request' })}
+                  className="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                >
+                  <option value="incident">Incident</option>
+                  <option value="request">Request</option>
+                </select>
               </div>
-              <button
-                onClick={createCategory}
-                className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Add Category
-              </button>
+              <div className="mt-4 flex items-center">
+                <label className="inline-flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newCategory.is_active}
+                    onChange={(e) => setNewCategory({ ...newCategory, is_active: e.target.checked })}
+                    className="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                  <span className="ml-2 text-sm text-gray-600">Active</span>
+                </label>
+                <button
+                  onClick={createCategory}
+                  disabled={!newCategory.name.trim()}
+                  className="ml-auto inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Category
+                </button>
+              </div>
             </div>
 
             <div className="divide-y divide-gray-200">
@@ -500,25 +521,45 @@ export default function AdminPanel() {
                             onChange={(e) => setEditingCategory({ ...editingCategory, description: e.target.value })}
                             className="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                           />
-                          <div className="flex items-center space-x-2">
-                            <button
-                              onClick={() => updateCategory(category.id)}
-                              className="text-green-600 hover:text-green-900"
-                            >
-                              Save
-                            </button>
-                            <button
-                              onClick={() => setEditingCategory(null)}
-                              className="text-gray-600 hover:text-gray-900"
-                            >
-                              Cancel
-                            </button>
+                          <select
+                            value={editingCategory.ticket_type}
+                            onChange={(e) => setEditingCategory({ ...editingCategory, ticket_type: e.target.value as 'incident' | 'request' })}
+                            className="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                          >
+                            <option value="incident">Incident</option>
+                            <option value="request">Request</option>
+                          </select>
+                          <div className="flex items-center space-x-4">
+                            <label className="inline-flex items-center">
+                              <input
+                                type="checkbox"
+                                checked={editingCategory.is_active}
+                                onChange={(e) => setEditingCategory({ ...editingCategory, is_active: e.target.checked })}
+                                className="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                              />
+                              <span className="ml-2 text-sm text-gray-600">Active</span>
+                            </label>
+                            <div className="flex space-x-2">
+                              <button
+                                onClick={() => updateCategory(category.id)}
+                                className="text-green-600 hover:text-green-900"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setEditingCategory(null)}
+                                className="text-gray-600 hover:text-gray-900"
+                              >
+                                Cancel
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ) : (
                         <>
                           <h3 className="text-lg font-medium text-gray-900">{category.name}</h3>
                           <p className="mt-1 text-sm text-gray-500">{category.description}</p>
+                          <p className="mt-1 text-sm text-gray-500">Type: {category.ticket_type}</p>
                         </>
                       )}
                     </div>
@@ -546,86 +587,11 @@ export default function AdminPanel() {
                   </div>
                 </div>
               ))}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'settings' && (
-          <div className="bg-white shadow-sm rounded-lg p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-6">System Settings</h3>
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-medium text-gray-900">Email Notifications</h4>
-                  <p className="text-sm text-gray-500">Enable email notifications for ticket updates</p>
+              {categories.length === 0 && (
+                <div className="p-6 text-center text-gray-500">
+                  No categories found. Create one to get started.
                 </div>
-                <button
-                  onClick={() => setSettings({ ...settings, emailNotifications: !settings.emailNotifications })}
-                  className={`relative inline-flex flex-shrink-0 h-6 w-11 border-2 border-transparent rounded-full cursor-pointer transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-                    settings.emailNotifications ? 'bg-blue-600' : 'bg-gray-200'
-                  }`}
-                >
-                  <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform ring-0 transition ease-in-out duration-200 ${
-                    settings.emailNotifications ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-medium text-gray-900">Auto Assignment</h4>
-                  <p className="text-sm text-gray-500">Automatically assign tickets to available technicians</p>
-                </div>
-                <button
-                  onClick={() => setSettings({ ...settings, autoAssignment: !settings.autoAssignment })}
-                  className={`relative inline-flex flex-shrink-0 h-6 w-11 border-2 border-transparent rounded-full cursor-pointer transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-                    settings.autoAssignment ? 'bg-blue-600' : 'bg-gray-200'
-                  }`}
-                >
-                  <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform ring-0 transition ease-in-out duration-200 ${
-                    settings.autoAssignment ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
-                </button>
-              </div>
-
-              <div>
-                <h4 className="text-sm font-medium text-gray-900 mb-2">Default Ticket Priority</h4>
-                <select
-                  value={settings.defaultPriority}
-                  onChange={(e) => setSettings({ ...settings, defaultPriority: e.target.value as 'low' | 'medium' | 'high' })}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                >
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-medium text-gray-900">Maintenance Mode</h4>
-                  <p className="text-sm text-gray-500">Temporarily disable ticket creation</p>
-                </div>
-                <button
-                  onClick={() => setSettings({ ...settings, maintenanceMode: !settings.maintenanceMode })}
-                  className={`relative inline-flex flex-shrink-0 h-6 w-11 border-2 border-transparent rounded-full cursor-pointer transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-                    settings.maintenanceMode ? 'bg-blue-600' : 'bg-gray-200'
-                  }`}
-                >
-                  <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform ring-0 transition ease-in-out duration-200 ${
-                    settings.maintenanceMode ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
-                </button>
-              </div>
-
-              <div className="pt-6">
-                <button
-                  onClick={saveSettings}
-                  className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                >
-                  Save Settings
-                </button>
-              </div>
+              )}
             </div>
           </div>
         )}
