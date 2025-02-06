@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Plus, Monitor, Server, Laptop, HardDrive, Search, Filter } from 'lucide-react';
 import { format } from 'date-fns';
@@ -18,21 +18,60 @@ interface ComputerAsset {
   location: string;
 }
 
+interface Category {
+  id: string;
+  name: string;
+}
+
+interface User {
+  id: string;
+  full_name: string;
+  email: string;
+  department: string;
+}
+
 export default function ComputerInventory() {
   const navigate = useNavigate();
   const [computers, setComputers] = useState<ComputerAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [showFilters, setShowFilters] = useState(false);
+  
+  // Filter states
   const [filters, setFilters] = useState({
     status: '',
     type: '',
     department: '',
+    assignedTo: '',
+    searchQuery: ''
   });
-  const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    loadInitialData();
+  }, []);
 
   useEffect(() => {
     loadComputers();
   }, [filters]);
+
+  async function loadInitialData() {
+    try {
+      // Load users for the assigned to filter
+      const { data: usersData, error: usersError } = await supabase
+        .from('users')
+        .select('id, full_name, email, department')
+        .order('full_name');
+
+      if (usersError) throw usersError;
+      setUsers(usersData || []);
+
+    } catch (err) {
+      console.error('Error loading initial data:', err);
+      setError('Failed to load filter options');
+    }
+  }
 
   async function loadComputers() {
     try {
@@ -44,7 +83,8 @@ export default function ComputerInventory() {
         .select(`
           *,
           assigned_to (
-            full_name
+            full_name,
+            email
           )
         `);
 
@@ -58,6 +98,14 @@ export default function ComputerInventory() {
       if (filters.department) {
         query = query.eq('department', filters.department);
       }
+      if (filters.assignedTo === 'unassigned') {
+        query = query.is('assigned_to', null);
+      } else if (filters.assignedTo) {
+        query = query.eq('assigned_to', filters.assignedTo);
+      }
+
+      // Always order by name
+      query = query.order('name');
 
       const { data, error } = await query;
 
@@ -65,24 +113,35 @@ export default function ComputerInventory() {
 
       // Apply search filter client-side
       let filteredData = data || [];
-      if (searchQuery) {
-        const search = searchQuery.toLowerCase();
+      if (filters.searchQuery) {
+        const search = filters.searchQuery.toLowerCase();
         filteredData = filteredData.filter(computer => 
-          computer.asset_tag.toLowerCase().includes(search) ||
           computer.name.toLowerCase().includes(search) ||
+          computer.asset_tag.toLowerCase().includes(search) ||
           computer.manufacturer.toLowerCase().includes(search) ||
-          computer.model.toLowerCase().includes(search)
+          computer.model.toLowerCase().includes(search) ||
+          (computer.assigned_to?.full_name.toLowerCase().includes(search))
         );
       }
 
       setComputers(filteredData);
     } catch (err) {
       console.error('Error loading computers:', err);
-      setError('Failed to load computer inventory');
+      setError('Failed to load computers. Please try again.');
     } finally {
       setLoading(false);
     }
   }
+
+  const resetFilters = () => {
+    setFilters({
+      status: '',
+      type: '',
+      department: '',
+      assignedTo: '',
+      searchQuery: ''
+    });
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -116,13 +175,22 @@ export default function ComputerInventory() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-semibold text-gray-900">Computer Inventory</h1>
-        <button
-          onClick={() => navigate('/inventory/new')}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Add Computer
-        </button>
+        <div className="flex items-center space-x-4">
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+          >
+            <Filter className="w-4 h-4 mr-2" />
+            {showFilters ? 'Hide Filters' : 'Show Filters'}
+          </button>
+          <Link
+            to="/inventory/new"
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add Computer
+          </Link>
+        </div>
       </div>
 
       {error && (
@@ -147,8 +215,8 @@ export default function ComputerInventory() {
                 </div>
                 <input
                   type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  value={filters.searchQuery}
+                  onChange={(e) => setFilters({ ...filters, searchQuery: e.target.value })}
                   placeholder="Search computers..."
                   className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 />
@@ -177,8 +245,31 @@ export default function ComputerInventory() {
                 <option value="workstation">Workstation</option>
                 <option value="server">Server</option>
               </select>
+              <select
+                value={filters.assignedTo}
+                onChange={(e) => setFilters({ ...filters, assignedTo: e.target.value })}
+                className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+              >
+                <option value="">All Assignments</option>
+                <option value="unassigned">Unassigned</option>
+                {users.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.full_name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
+          {showFilters && (
+            <div className="mt-4 flex items-center justify-end">
+              <button
+                onClick={resetFilters}
+                className="text-sm font-medium text-gray-700 hover:text-gray-900"
+              >
+                Reset Filters
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="overflow-x-auto">
