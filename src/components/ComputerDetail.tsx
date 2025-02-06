@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { ArrowLeft, Monitor, Server, Laptop, HardDrive, Calendar, PenTool as Tool, Package, UserPlus, History } from 'lucide-react';
+import { Clock, AlertCircle, CheckCircle, ArrowLeft, User, Calendar, Tag, MessageSquare, UserPlus, Monitor, Server, Laptop, HardDrive, Package, History, PenTool as Tool } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -24,8 +24,6 @@ interface ComputerAsset {
   manufacturer: string;
   model: string;
   status: 'active' | 'maintenance' | 'retired' | 'storage';
-  purchase_date: string;
-  warranty_expiry: string;
   assigned_to: { full_name: string; email: string } | null;
   assigned_date: string;
   location: string;
@@ -77,12 +75,17 @@ export default function ComputerDetail() {
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<string>('');
-  const [assigningUser, setAssigningUser] = useState(false);
+  const [assigning, setAssigning] = useState(false);
   const [assignmentNotes, setAssignmentNotes] = useState('');
+  const [userRole, setUserRole] = useState<string>('user');
+  const [changingStatus, setChangingStatus] = useState(false);
 
   useEffect(() => {
-    loadComputerData();
-  }, [id]);
+    if (user) {
+      loadUserRole();
+      loadComputerData();
+    }
+  }, [id, user]);
 
   useEffect(() => {
     if (showAssignModal) {
@@ -101,6 +104,27 @@ export default function ComputerDetail() {
       setUsers(data || []);
     } catch (err) {
       console.error('Error loading users:', err);
+    }
+  }
+
+  async function loadUserRole() {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (data) {
+        setUserRole(data.role);
+      }
+    } catch (err) {
+      console.error('Error loading user role:', err);
+      setUserRole('user');
     }
   }
 
@@ -172,7 +196,7 @@ export default function ComputerDetail() {
     if (!selectedUser || !computer || !user) return;
 
     try {
-      setAssigningUser(true);
+      setAssigning(true);
 
       if (computer.assigned_to) {
         const { error: updateError } = await supabase
@@ -213,7 +237,7 @@ export default function ComputerDetail() {
       console.error('Error assigning computer:', err);
       setError('Failed to assign computer');
     } finally {
-      setAssigningUser(false);
+      setAssigning(false);
     }
   }
 
@@ -221,7 +245,7 @@ export default function ComputerDetail() {
     if (!computer || !user) return;
 
     try {
-      setAssigningUser(true);
+      setAssigning(true);
 
       const { error: historyError } = await supabase
         .from('computer_assignment_history')
@@ -242,11 +266,52 @@ export default function ComputerDetail() {
       if (unassignError) throw unassignError;
 
       await loadComputerData();
+      setShowAssignModal(false);
     } catch (err) {
       console.error('Error unassigning computer:', err);
       setError('Failed to unassign computer');
     } finally {
-      setAssigningUser(false);
+      setAssigning(false);
+    }
+  }
+
+  async function handleStatusChange(newStatus: string) {
+    if (!computer || !user || !['admin', 'technician'].includes(userRole)) return;
+
+    try {
+      setChangingStatus(true);
+      setError(null);
+
+      const { error: updateError } = await supabase
+        .from('computer_assets')
+        .update({ 
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', computer.id);
+
+      if (updateError) throw updateError;
+
+      if (newStatus === 'maintenance') {
+        const { error: maintenanceError } = await supabase
+          .from('computer_maintenance')
+          .insert([{
+            computer_id: computer.id,
+            maintenance_type: 'Status Change',
+            description: `Status changed to ${newStatus}`,
+            performed_by: user.id,
+            notes: 'Automatic entry for status change'
+          }]);
+
+        if (maintenanceError) throw maintenanceError;
+      }
+
+      await loadComputerData();
+    } catch (err) {
+      console.error('Error updating computer status:', err);
+      setError('Failed to update computer status');
+    } finally {
+      setChangingStatus(false);
     }
   }
 
@@ -269,6 +334,9 @@ export default function ComputerDetail() {
       default: return 'bg-gray-100 text-gray-800';
     }
   };
+
+  const canChangeStatus = ['admin', 'technician'].includes(userRole);
+  const canAssignComputers = ['admin', 'technician'].includes(userRole);
 
   if (loading) {
     return (
@@ -300,9 +368,45 @@ export default function ComputerDetail() {
           <ArrowLeft className="w-4 h-4 mr-2" />
           Back to Inventory
         </button>
-        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(computer.status)}`}>
-          {computer.status}
-        </span>
+        <div className="flex items-center space-x-3">
+          {canAssignComputers && (
+            <button
+              onClick={() => setShowAssignModal(true)}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+            >
+              <UserPlus className="w-4 h-4 mr-2" />
+              Assign User
+            </button>
+          )}
+          {canChangeStatus ? (
+            <select
+              value={computer?.status || ''}
+              onChange={(e) => handleStatusChange(e.target.value)}
+              disabled={changingStatus}
+              className={`inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium ${
+                changingStatus ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+              } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500`}
+            >
+              <option value="active">Active</option>
+              <option value="maintenance">Maintenance</option>
+              <option value="storage">Storage</option>
+              <option value="retired">Retired</option>
+            </select>
+          ) : (
+            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(computer?.status || '')}`}>
+              {computer?.status}
+            </span>
+          )}
+          {computer?.assigned_to && canAssignComputers && (
+            <button
+              onClick={unassignComputer}
+              disabled={assigning}
+              className="inline-flex items-center px-4 py-2 border border-red-300 shadow-sm text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50"
+            >
+              Unassign User
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="bg-white shadow-sm rounded-lg">
@@ -316,24 +420,6 @@ export default function ComputerDetail() {
                 <h1 className="text-2xl font-semibold text-gray-900">{computer.name}</h1>
                 <p className="text-sm text-gray-500">Asset Tag: {computer.asset_tag}</p>
               </div>
-            </div>
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => setShowAssignModal(true)}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                <UserPlus className="w-4 h-4 mr-2" />
-                Assign User
-              </button>
-              {computer.assigned_to && (
-                <button
-                  onClick={unassignComputer}
-                  disabled={assigningUser}
-                  className="inline-flex items-center px-4 py-2 border border-red-300 shadow-sm text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50"
-                >
-                  Unassign User
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -431,30 +517,6 @@ export default function ComputerDetail() {
                   <div>
                     <dt className="text-sm font-medium text-gray-500">Location</dt>
                     <dd className="text-sm text-gray-900">{computer.location || '-'}</dd>
-                  </div>
-                </dl>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Dates</h3>
-                <dl className="space-y-4">
-                  <div>
-                    <dt className="text-sm font-medium text-gray-500">Purchase Date</dt>
-                    <dd className="text-sm text-gray-900">
-                      {computer.purchase_date ? format(new Date(computer.purchase_date), 'MMM d, yyyy') : '-'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-sm font-medium text-gray-500">Warranty Expiry</dt>
-                    <dd className="text-sm text-gray-900">
-                      {computer.warranty_expiry ? format(new Date(computer.warranty_expiry), 'MMM d, yyyy') : '-'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-sm font-medium text-gray-500">Assignment Date</dt>
-                    <dd className="text-sm text-gray-900">
-                      {computer.assigned_date ? format(new Date(computer.assigned_date), 'MMM d, yyyy') : '-'}
-                    </dd>
                   </div>
                 </dl>
               </div>
@@ -672,25 +734,25 @@ export default function ComputerDetail() {
       {showAssignModal && (
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Assign Computer to User</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Assign Computer</h3>
             
             <div className="space-y-4">
               <div>
-                <label htmlFor="user" className="block text-sm font-medium text-gray-700">
-                  Select User
+                <label htmlFor="staff" className="block text-sm font-medium text-gray-700">
+                  Select Staff Member
                 </label>
                 <select
-                  id="user"
+                  id="staff"
                   value={selectedUser}
                   onChange={(e) => setSelectedUser(e.target.value)}
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                 >
-                  <option value="">Select a user</option>
-                  {users.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.full_name} - {user.department}
+                  <option value="">Select a staff member</option>
+                  {users.map((staff) => (
+                    <option key={staff.id} value={staff.id}>
+                      {staff.full_name} ({staff.department})
                     </option>
-                  ))}
+                   ))}
                 </select>
               </div>
 
@@ -720,13 +782,23 @@ export default function ComputerDetail() {
                 >
                   Cancel
                 </button>
+                {computer.assigned_to && (
+                  <button
+                    type="button"
+                    onClick={unassignComputer}
+                    disabled={assigning}
+                    className="px-4 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50"
+                  >
+                    Unassign
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={assignComputer}
-                  disabled={!selectedUser || assigningUser}
+                  disabled={!selectedUser || assigning}
                   className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {assigningUser ? 'Assigning...' : 'Assign'}
+                  {assigning ? 'Assigning...' : 'Assign'}
                 </button>
               </div>
             </div>
