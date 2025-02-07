@@ -50,6 +50,13 @@ export default function TicketDetail() {
   const [selectedStaff, setSelectedStaff] = useState<string>('');
   const [assigning, setAssigning] = useState(false);
 
+  // Format ticket number to be 6 digits with leading zeros
+  const formatTicketNumber = (id: string) => {
+    // Take the first 6 characters of the UUID and convert to a number
+    const numericId = parseInt(id.replace(/-/g, '').substring(0, 6), 16);
+    return `TKT-${numericId.toString().padStart(6, '0')}`;
+  };
+
   useEffect(() => {
     if (user) {
       loadTicketData();
@@ -329,13 +336,18 @@ export default function TicketDetail() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate('/tickets')}
-          className="flex items-center text-gray-600 hover:text-gray-900"
-        >
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to Tickets
-        </button>
+        <div className="flex items-center space-x-4">
+          <button
+            onClick={() => navigate('/tickets')}
+            className="flex items-center text-gray-600 hover:text-gray-900"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Tickets
+          </button>
+          <div className="text-lg font-medium text-gray-900">
+            {formatTicketNumber(ticket.id)}
+          </div>
+        </div>
         <div className="flex items-center space-x-3">
           {canAssignTickets && (
             <button

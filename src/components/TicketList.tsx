@@ -46,6 +46,13 @@ export default function TicketList() {
     searchQuery: ''
   });
 
+  // Format ticket number to be 6 digits with leading zeros
+  const formatTicketNumber = (id: string) => {
+    // Take the first 6 characters of the UUID and convert to a number
+    const numericId = parseInt(id.replace(/-/g, '').substring(0, 6), 16);
+    return `TKT-${numericId.toString().padStart(6, '0')}`;
+  };
+
   useEffect(() => {
     loadInitialData();
   }, []);
@@ -132,6 +139,7 @@ export default function TicketList() {
         const search = filters.searchQuery.toLowerCase();
         filteredData = filteredData.filter(ticket => 
           ticket.title.toLowerCase().includes(search) ||
+          formatTicketNumber(ticket.id).toLowerCase().includes(search) ||
           ticket.requestor.full_name.toLowerCase().includes(search) ||
           (ticket.assignee?.full_name.toLowerCase().includes(search))
         );
@@ -363,6 +371,9 @@ export default function TicketList() {
               <thead>
                 <tr>
                   <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Ticket
+                  </th>
+                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Status
                   </th>
                   <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -388,6 +399,9 @@ export default function TicketList() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {tickets.map((ticket) => (
                   <tr key={ticket.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {formatTicketNumber(ticket.id)}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         {getStatusIcon(ticket.status)}
